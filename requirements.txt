@@ -1,0 +1,4 @@
+formidable@3.5.4
+uuid@11.1.0
+winston@3.17.0
+#install this @prisma/client@latest
