@@ -97,6 +97,207 @@ Let me know if you want:
 * A real example usage with a `User` model
 * Help creating your own plugin or middleware for this
 
+# CURD_OPREATION_EXPRESS.js
+
+## Enhanced Multi-Table Operations
+
+The `PrismaCrudRouter` now supports advanced multi-table operations with foreign key relationships, allowing you to create, update, and delete related data in a single request.
+
+### Multi-Table Features
+
+✅ **Nested Creates**: Create parent + related records in one request  
+✅ **Nested Updates**: Update parent + related records together  
+✅ **Cascade Deletes**: Delete related records when parent is deleted  
+✅ **File Uploads**: Handle files with multi-table data  
+✅ **Validation**: Validate both parent and nested data  
+✅ **Transactions**: Ensure data consistency  
+✅ **Foreign Keys**: Proper relationship handling  
+
+### Basic Multi-Table Configuration
+
+```js
+const userWithNestedConfig = {
+  enableNestedOperations: true,
+  nestedModels: {
+    create: ['profile', 'posts'], // Create related data
+    update: ['profile'],          // Update related data
+    delete: ['profile', 'posts']  // Delete related data
+  }
+};
+
+crudRouter.route('/api/users', prisma.user, userWithNestedConfig);
+```
+
+### Single Request Multi-Table Creation
+
+```js
+// POST /api/users
+{
+  "name": "John Doe",
+  "email": "john@example.com",
+  "age": 30,
+  "profile": {
+    "bio": "Software developer",
+    "contact": "john@example.com"
+  },
+  "posts": [
+    {
+      "title": "My First Post",
+      "content": "Hello World!"
+    }
+  ]
+}
+```
+
+### File Uploads with Multi-Table Data
+
+```js
+const userWithFileConfig = {
+  middleware: [fileHandler.uploadMiddleware()],
+  enableNestedOperations: true,
+  nestedModels: {
+    create: ['profile']
+  },
+  beforeActions: {
+    create: async (data) => {
+      // Process uploaded files and add to profile data
+      if (data.uploadedFiles && data.uploadedFiles.avatar) {
+        if (!data.profile) data.profile = {};
+        data.profile.avatarUrl = data.uploadedFiles.avatar[0].url;
+      }
+      data.createdAt = new Date();
+      data.updatedAt = new Date();
+    }
+  }
+};
+```
+
+### Advanced Multi-Table Example
+
+```js
+// Complete example with validation and file handling
+const userWithNestedConfig = {
+  middleware: [fileHandler.uploadMiddleware()],
+  enableNestedOperations: true,
+  nestedModels: {
+    create: ['profile', 'posts'],
+    update: ['profile'],
+    delete: ['profile', 'posts']
+  },
+  validation: {
+    create: async (data) => {
+      if (!data.name) return { isValid: false, message: "Name is required" };
+      if (!data.email) return { isValid: false, message: "Email is required" };
+      return { isValid: true };
+    }
+  },
+  beforeActions: {
+    create: async (data) => {
+      // Process uploaded files
+      if (data.uploadedFiles && data.uploadedFiles.avatar) {
+        if (!data.profile) data.profile = {};
+        data.profile.avatarUrl = data.uploadedFiles.avatar[0].url;
+      }
+      data.createdAt = new Date();
+      data.updatedAt = new Date();
+    }
+  },
+  afterActions: {
+    create: async (created) => {
+      console.log('User created with nested data:', created);
+    }
+  }
+};
+
+crudRouter.route('/api/users-with-nested', prisma.user, userWithNestedConfig);
+```
+
+### Route Options for Multi-Table Operations
+
+```js
+{
+  // Enable nested operations
+  enableNestedOperations: true,
+  
+  // Configure which relations to handle
+  nestedModels: {
+    create: ['profile', 'posts'],    // Relations to create nested
+    update: ['profile'],             // Relations to update nested
+    delete: ['profile', 'posts']     // Relations to delete when parent is deleted
+  },
+  
+  // Standard options still work
+  middleware: [fileHandler.uploadMiddleware()],
+  validation: { /* ... */ },
+  beforeActions: { /* ... */ },
+  afterActions: { /* ... */ },
+  includeRelations: true,
+  enableConstraintChecking: true,
+  enableCascadeHandling: true
+}
+```
+
+### Database Schema Requirements
+
+For multi-table operations to work, your Prisma schema should have proper relationships:
+
+```prisma
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  age       Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  profile   Profile?
+  posts     Post[]
+}
+
+model Profile {
+  id        Int      @id @default(autoincrement())
+  bio       String?
+  contact   String?
+  avatarUrl String?
+  userId    Int      @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Post {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+```
+
+### Transaction Safety
+
+All nested operations use Prisma transactions to ensure data consistency:
+
+- If any part of the operation fails, all changes are rolled back
+- Foreign key constraints are properly maintained
+- Cascade operations are handled automatically
+
+### Error Handling
+
+Multi-table operations include comprehensive error handling:
+
+```js
+// Example error response for constraint violation
+{
+  "success": false,
+  "type": "error",
+  "method": "POST",
+  "message": "Constraint violations: Foreign key constraint violation: profile.userId references non-existent User",
+  "statusCode": 400
+}
+```
+
+---
+
 # FileHandler Integration with PrismaCrudRouter
 
 ## FileHandler Usage
@@ -121,7 +322,7 @@ app.post('/upload', fileHandler.uploadMiddleware(), (req, res) => {
 
 ### Integration with PrismaCrudRouter
 
-You can use the file upload middleware in your CRUD routes. For example, to allow file uploads on a create route:
+You can use the file upload middleware in your CRUD routes. For example, to allow file uploads on a create route: 
 
 ```js
 const PrismaCrudRouter = require('./index');
@@ -162,4 +363,3 @@ Files are stored in:
 - `uploadDir`: Change upload directory
 
 ---
-# CURD_OPREATION_EXPRESS.js

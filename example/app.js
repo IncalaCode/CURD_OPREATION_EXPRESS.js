@@ -144,6 +144,61 @@ app.get('/api/routes', (req, res) => {
 //   res.status(error.status || 500).json(errorResponse);
 // });
 
+// Enhanced multi-table configuration for PrismaCrudRouter
+const userWithNestedConfig = {
+  middleware: [fileHandler.uploadMiddleware()],
+  enableNestedOperations: true,
+  nestedModels: {
+    create: ['profile', 'posts'], // Allow creating profile and posts with user
+    update: ['profile'], // Allow updating profile with user
+    delete: ['profile', 'posts'] // Delete profile and posts when user is deleted
+  },
+  validation: {
+    create: async (data) => {
+      if (!data.name) return { isValid: false, message: "Name is required" };
+      if (!data.email) return { isValid: false, message: "Email is required" };
+      return { isValid: true };
+    }
+  },
+  beforeActions: {
+    create: async (data) => {
+      // Process uploaded files and add to profile data
+      if (data.uploadedFiles && data.uploadedFiles.avatar) {
+        if (!data.profile) data.profile = {};
+        data.profile.avatarUrl = data.uploadedFiles.avatar[0].url;
+      }
+      data.createdAt = new Date();
+      data.updatedAt = new Date();
+    }
+  },
+  afterActions: {
+    create: async (created) => {
+      console.log('User created with nested data:', created);
+    }
+  }
+};
+
+// Register the enhanced multi-table route
+crudRouter.route('/api/users-with-nested', prisma.user, userWithNestedConfig);
+
+// Example of how to use the enhanced route:
+// POST /api/users-with-nested
+// {
+//   "name": "John Doe",
+//   "email": "john@example.com",
+//   "age": 30,
+//   "profile": {
+//     "bio": "Software developer",
+//     "contact": "john@example.com"
+//   },
+//   "posts": [
+//     {
+//       "title": "My First Post",
+//       "content": "Hello World!"
+//     }
+//   ]
+// }
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT);
 

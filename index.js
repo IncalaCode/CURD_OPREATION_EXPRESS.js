@@ -87,7 +87,7 @@ class PrismaCrudRouter {
     if (typeof plugin === 'function') {
       plugin(this);
     } else if (plugin && typeof plugin.register === 'function') {
-      plugin.register(this);https
+      plugin.register(this);
     }
   }
 
@@ -113,6 +113,11 @@ class PrismaCrudRouter {
    *      - excludeRelations {Array<string>} - Relation fields to exclude
    *      - enableConstraintChecking {boolean} - Enable database constraint validation (default: true)
    *      - enableCascadeHandling {boolean} - Enable cascade operation handling (default: true)
+   *      - enableNestedOperations {boolean} - Enable nested create/update operations (default: false)
+   *      - nestedModels {Object} - Configuration for nested operations:
+   *          - create {Array<string>} - Relations to create nested (e.g., ['profile', 'posts'])
+   *          - update {Array<string>} - Relations to update nested
+   *          - delete {Array<string>} - Relations to delete when parent is deleted
    */
   route(routePath, model, routeOptions = {}) {
     const {
@@ -127,12 +132,72 @@ class PrismaCrudRouter {
       excludeRelations = [],
       enableConstraintChecking =  routeOptions.enableConstraintChecking ??  this.options.enableConstraintChecking,
       enableCascadeHandling = routeOptions.enableCascadeHandling ?? this.options.enableCascadeHandling,
+      enableNestedOperations = routeOptions.enableNestedOperations || false,
+      nestedModels = routeOptions.nestedModels || {},
     } = routeOptions;
 
     const allMiddleware = [...this.options.defaultMiddleware, ...middleware];
     if (authMiddleware) {
       allMiddleware.push(authMiddleware);
     }
+
+    // Helper function to process nested data
+    const processNestedData = (data, operation = 'create') => {
+      const mainData = { ...data };
+      const nestedData = {};
+
+      if (enableNestedOperations && nestedModels[operation]) {
+        for (const relation of nestedModels[operation]) {
+          if (data[relation]) {
+            nestedData[relation] = data[relation];
+            delete mainData[relation];
+          }
+        }
+      }
+
+      return { mainData, nestedData };
+    };
+
+    // Helper function to create with nested relations
+    const createWithNested = async (data) => {
+      const { mainData, nestedData } = processNestedData(data, 'create');
+      
+      if (Object.keys(nestedData).length === 0) {
+        return await model.create({ data: mainData });
+      }
+
+      // Use transaction for nested operations
+      return await this.models.$transaction(async (tx) => {
+        const created = await tx[this.getModelName(model).toLowerCase()].create({
+          data: {
+            ...mainData,
+            ...nestedData
+          }
+        });
+        return created;
+      });
+    };
+
+    // Helper function to update with nested relations
+    const updateWithNested = async (id, data) => {
+      const { mainData, nestedData } = processNestedData(data, 'update');
+      
+      if (Object.keys(nestedData).length === 0) {
+        return await model.update({ where: { id: Number(id) }, data: mainData });
+      }
+
+      // Use transaction for nested operations
+      return await this.models.$transaction(async (tx) => {
+        const updated = await tx[this.getModelName(model).toLowerCase()].update({
+          where: { id: Number(id) },
+          data: {
+            ...mainData,
+            ...nestedData
+          }
+        });
+        return updated;
+      });
+    };
 
     // Register CRUD routes directly on the Express app
     // GET /: get all
@@ -219,7 +284,12 @@ class PrismaCrudRouter {
           if (!constraintCheck.isValid) throw new Error(`Constraint violations: ${constraintCheck.violations.join(', ')}`);
         }
         if (beforeActions.create) await beforeActions.create(data);
-        const created = await model.create({ data });
+        
+        // Handle nested operations if enabled
+        const created = enableNestedOperations ? 
+          await createWithNested(data) : 
+          await model.create({ data });
+        
         if (afterActions.create) await afterActions.create(created);
         res.status(201).json(this.apiResponse.success('post', created));
       } catch (error) {
@@ -250,7 +320,12 @@ class PrismaCrudRouter {
           }
         }
         if (beforeActions.update) await beforeActions.update(id, data);
-        const updated = await model.update({ where: { id: Number(id) }, data });
+        
+        // Handle nested operations if enabled
+        const updated = enableNestedOperations ? 
+          await updateWithNested(id, data) : 
+          await model.update({ where: { id: Number(id) }, data });
+        
         if (afterActions.update) await afterActions.update(updated);
         res.json(this.apiResponse.success('put', updated));
       } catch (error) {
@@ -380,6 +455,15 @@ class PrismaCrudRouter {
    */
   createCrudRoute(routePath, model, options = {}) {
     this.route(routePath, model, options);
+  }
+
+  /**
+   * Get model name from Prisma model
+   * @param {Object} model - Prisma model
+   * @returns {string} Model name
+   */
+  getModelName(model) {
+    return model.constructor.name || 'Unknown';
   }
 }
 
