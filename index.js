@@ -113,11 +113,11 @@ class PrismaCrudRouter {
    *      - excludeRelations {Array<string>} - Relation fields to exclude
    *      - enableConstraintChecking {boolean} - Enable database constraint validation (default: true)
    *      - enableCascadeHandling {boolean} - Enable cascade operation handling (default: true)
-   *      - enableNestedOperations {boolean} - Enable nested create/update operations (default: false)
    *      - nestedModels {Object} - Configuration for nested operations:
    *          - create {Array<string>} - Relations to create nested (e.g., ['profile', 'posts'])
    *          - update {Array<string>} - Relations to update nested
    *          - delete {Array<string>} - Relations to delete when parent is deleted
+   *      - autoDetectRelations {boolean} - Automatically detect and handle relations (default: true)
    */
   route(routePath, model, routeOptions = {}) {
     const {
@@ -132,8 +132,8 @@ class PrismaCrudRouter {
       excludeRelations = [],
       enableConstraintChecking =  routeOptions.enableConstraintChecking ??  this.options.enableConstraintChecking,
       enableCascadeHandling = routeOptions.enableCascadeHandling ?? this.options.enableCascadeHandling,
-      enableNestedOperations = routeOptions.enableNestedOperations || false,
       nestedModels = routeOptions.nestedModels || {},
+      autoDetectRelations = routeOptions.autoDetectRelations !== false,
     } = routeOptions;
 
     const allMiddleware = [...this.options.defaultMiddleware, ...middleware];
@@ -141,62 +141,110 @@ class PrismaCrudRouter {
       allMiddleware.push(authMiddleware);
     }
 
-    // Helper function to process nested data
-    const processNestedData = (data, operation = 'create') => {
-      const mainData = { ...data };
-      const nestedData = {};
+    const detectRelationTypes = (data) => {
+      const singleRelations = {};
+      const bulkRelations = {};
 
-      if (enableNestedOperations && nestedModels[operation]) {
-        for (const relation of nestedModels[operation]) {
-          if (data[relation]) {
-            nestedData[relation] = data[relation];
-            delete mainData[relation];
-          }
+      if (!autoDetectRelations) {
+        return { singleRelations, bulkRelations };
+      }
+
+      for (const [key, value] of Object.entries(data)) {
+        if (typeof value !== 'object' || value === null || 
+            ['id', 'createdAt', 'updatedAt', 'uploadedFiles'].includes(key)) {
+          continue;
+        }
+
+        if (Array.isArray(value)) {
+          bulkRelations[key] = value;
+        }
+        else if (typeof value === 'object' && !Array.isArray(value)) {
+          singleRelations[key] = value;
         }
       }
 
-      return { mainData, nestedData };
+      return { singleRelations, bulkRelations };
     };
 
-    // Helper function to create with nested relations
-    const createWithNested = async (data) => {
-      const { mainData, nestedData } = processNestedData(data, 'create');
+    const processNestedData = (data, operation = 'create') => {
+      const mainData = { ...data };
+      const { singleRelations, bulkRelations } = detectRelationTypes(data);
+
+      Object.keys(singleRelations).forEach(key => {
+        delete mainData[key];
+      });
+      Object.keys(bulkRelations).forEach(key => {
+        delete mainData[key];
+      });
+
+      return { mainData, singleRelations, bulkRelations };
+    };
+
+
+    const createWithAutoDetectedRelations = async (data) => {
+      const { mainData, singleRelations, bulkRelations } = processNestedData(data, 'create');
       
-      if (Object.keys(nestedData).length === 0) {
+      if (Object.keys(singleRelations).length === 0 && Object.keys(bulkRelations).length === 0) {
         return await model.create({ data: mainData });
       }
 
-      // Use transaction for nested operations
-      return await this.models.$transaction(async (tx) => {
-        const created = await tx[this.getModelName(model).toLowerCase()].create({
-          data: {
-            ...mainData,
-            ...nestedData
-          }
-        });
-        return created;
+      const createData = { ...mainData };
+      
+      for (const [relation, items] of Object.entries(singleRelations)) {
+        createData[relation] = {
+          create: items
+        };
+      }
+      
+      for (const [relation, items] of Object.entries(bulkRelations)) {
+        createData[relation] = {
+          create: items
+        };
+      }
+
+      const created = await model.create({
+        data: createData,
+        include: {
+          ...Object.keys(singleRelations).reduce((acc, key) => ({ ...acc, [key]: true }), {}),
+          ...Object.keys(bulkRelations).reduce((acc, key) => ({ ...acc, [key]: true }), {})
+        }
       });
+      
+      return created;
     };
 
-    // Helper function to update with nested relations
-    const updateWithNested = async (id, data) => {
-      const { mainData, nestedData } = processNestedData(data, 'update');
+
+    const updateWithAutoDetectedRelations = async (id, data) => {
+      const { mainData, singleRelations, bulkRelations } = processNestedData(data, 'update');
       
-      if (Object.keys(nestedData).length === 0) {
+      if (Object.keys(singleRelations).length === 0 && Object.keys(bulkRelations).length === 0) {
         return await model.update({ where: { id: Number(id) }, data: mainData });
       }
 
-      // Use transaction for nested operations
-      return await this.models.$transaction(async (tx) => {
-        const updated = await tx[this.getModelName(model).toLowerCase()].update({
-          where: { id: Number(id) },
-          data: {
-            ...mainData,
-            ...nestedData
-          }
-        });
-        return updated;
+      const updateData = { ...mainData };
+        
+      for (const [relation, items] of Object.entries(singleRelations)) {
+        updateData[relation] = {
+          create: items
+        };
+      }
+      
+      for (const [relation, items] of Object.entries(bulkRelations)) {
+        updateData[relation] = {
+          create: items
+        };
+      }
+
+      const updated = await model.update({
+        where: { id: Number(id) },
+        data: updateData,
+        include: {
+          ...Object.keys(singleRelations).reduce((acc, key) => ({ ...acc, [key]: true }), {}),
+          ...Object.keys(bulkRelations).reduce((acc, key) => ({ ...acc, [key]: true }), {})
+        }
       });
+      
+      return updated;
     };
 
     // Register CRUD routes directly on the Express app
@@ -236,10 +284,13 @@ class PrismaCrudRouter {
         if (afterActions.get) {
           await afterActions.get({ rows, count });
         }
-        res.json(this.apiResponse.success('get', { data: rows, count }));
+        const apiResponse = this.apiResponse.success('get', { data: rows, count });
+        this.apiResponse.setResponseHeaders(res, apiResponse);
+        res.status(apiResponse.statusCode).json(apiResponse.body);
       } catch (error) {
         const errResp = this.handleError(error, 'get', errorHandler);
-        res.status(errResp.status || 500).json(errResp);
+        this.apiResponse.setResponseHeaders(res, errResp);
+        res.status(errResp.statusCode || 500).json(errResp.body);
       }
     });
 
@@ -263,10 +314,13 @@ class PrismaCrudRouter {
           include: Object.keys(includeObject).length > 0 ? includeObject : undefined,
         });
         if (!row) throw { code: 'P2025', message: 'Record not found' };
-        res.json(this.apiResponse.success('get', row));
+        const apiResponse = this.apiResponse.success('get', row);
+        this.apiResponse.setResponseHeaders(res, apiResponse);
+        res.status(apiResponse.statusCode).json(apiResponse.body);
       } catch (error) {
         const errResp = this.handleError(error, 'get', errorHandler);
-        res.status(errResp.status || 500).json(errResp);
+        this.apiResponse.setResponseHeaders(res, errResp);
+        res.status(errResp.statusCode || 500).json(errResp.body);
       }
     });
 
@@ -285,16 +339,19 @@ class PrismaCrudRouter {
         }
         if (beforeActions.create) await beforeActions.create(data);
         
-        // Handle nested operations if enabled
-        const created = enableNestedOperations ? 
-          await createWithNested(data) : 
+        // Auto-detect and handle relations
+        const created = autoDetectRelations ? 
+          await createWithAutoDetectedRelations(data) : 
           await model.create({ data });
         
         if (afterActions.create) await afterActions.create(created);
-        res.status(201).json(this.apiResponse.success('post', created));
+        const apiResponse = this.apiResponse.success('post', created);
+        this.apiResponse.setResponseHeaders(res, apiResponse);
+        res.status(201).json(apiResponse.body);
       } catch (error) {
         const errResp = this.handleError(error, 'post', errorHandler);
-        res.status(errResp.status || 500).json(errResp);
+        this.apiResponse.setResponseHeaders(res, errResp);
+        res.status(errResp.statusCode || 500).json(errResp.body);
       }
     });
 
@@ -321,16 +378,18 @@ class PrismaCrudRouter {
         }
         if (beforeActions.update) await beforeActions.update(id, data);
         
-        // Handle nested operations if enabled
-        const updated = enableNestedOperations ? 
-          await updateWithNested(id, data) : 
+        const updated = autoDetectRelations ? 
+          await updateWithAutoDetectedRelations(id, data) : 
           await model.update({ where: { id: Number(id) }, data });
         
         if (afterActions.update) await afterActions.update(updated);
-        res.json(this.apiResponse.success('put', updated));
+        const apiResponse = this.apiResponse.success('put', updated);
+        this.apiResponse.setResponseHeaders(res, apiResponse);
+        res.status(apiResponse.statusCode).json(apiResponse.body);
       } catch (error) {
         const errResp = this.handleError(error, 'put', errorHandler);
-        res.status(errResp.status || 500).json(errResp);
+        this.apiResponse.setResponseHeaders(res, errResp);
+        res.status(errResp.statusCode || 500).json(errResp.body);
       }
     });
 
@@ -348,10 +407,13 @@ class PrismaCrudRouter {
         }
         const deleted = await model.delete({ where: { id: Number(id) } });
         if (afterActions.destroy) await afterActions.destroy(deleted);
-        res.json(this.apiResponse.success('delete', deleted));
+        const apiResponse = this.apiResponse.success('delete', deleted);
+        this.apiResponse.setResponseHeaders(res, apiResponse);
+        res.status(apiResponse.statusCode).json(apiResponse.body);
       } catch (error) {
         const errResp = this.handleError(error, 'delete', errorHandler);
-        res.status(errResp.status || 500).json(errResp);
+        this.apiResponse.setResponseHeaders(res, errResp);
+        res.status(errResp.statusCode || 500).json(errResp.body);
       }
     });
 
@@ -365,6 +427,7 @@ class PrismaCrudRouter {
         }
       });
     }
+    console.log('routePath', routePath);
   }
 
   /**
@@ -373,10 +436,9 @@ class PrismaCrudRouter {
    * @param {string} method - HTTP method that triggered the error ('get', 'post', etc)
    * @param {Function} [customErrorHandler] - Optional custom error handler function
    * @returns {Object} Formatted error response with:
-   *      - status: HTTP status code
-   *      - message: Error message (detailed in dev, generic in prod)
-   *      - data: null
-   *      - method: The HTTP method
+   *      - body: Error response body for React Admin
+   *      - headers: Response headers
+   *      - statusCode: HTTP status code
    * @example
    * // Default error handling
    * router.handleError(new Error('Not found'), 'get');
@@ -392,10 +454,9 @@ class PrismaCrudRouter {
     }
 
     let errorMessage = this.isDev ? (error.code ? ErrorCode[error.code]?.errorMessage  : error.message  ) : ErrorCode.default.errorMessage;
-    let statusCode = error.code ? ErrorCode[error.code]?.errorMessage : ErrorCode.default.statusCode;
+    let statusCode = error.code ? ErrorCode[error.code]?.statusCode : ErrorCode.default.statusCode;
 
     return this.apiResponse.error(method, null, errorMessage, statusCode);
-
   }
 
   /**

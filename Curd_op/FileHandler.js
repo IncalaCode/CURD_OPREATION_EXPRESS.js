@@ -55,7 +55,8 @@ class FileHandler {
       form.parse(req, async (err, fields, files) => {
         if (err) {
           const errorResp = apiResponse.error('post', null, 'File upload error: ' + err.message, 400);
-          return res.status(400).json(errorResp);
+          apiResponse.setResponseHeaders(res, errorResp);
+          return res.status(400).json(errorResp.body);
         }
         try {
           // Organize and validate files
@@ -65,7 +66,8 @@ class FileHandler {
           next();
         } catch (e) {
           const errorResp = apiResponse.error('post', null, 'File handling error: ' + e.message, 400);
-          return res.status(400).json(errorResp);
+          apiResponse.setResponseHeaders(res, errorResp);
+          return res.status(400).json(errorResp.body);
         }
       });
     };

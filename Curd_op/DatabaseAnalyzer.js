@@ -1,4 +1,4 @@
-export class DatabaseAnalyzer {
+class DatabaseAnalyzer {
   constructor() {
     this.dbStructure = new Map();
     this.relationCache = new Map();
@@ -256,3 +256,5 @@ export class DatabaseAnalyzer {
     };
   }
 }
+
+module.exports = { DatabaseAnalyzer };
