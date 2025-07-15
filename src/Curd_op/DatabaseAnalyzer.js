@@ -93,9 +93,22 @@ class DatabaseAnalyzer {
   getModelMetadata(model) {
     try {
       const modelName = this.getModelName(model);
+      // Try to get a sample record to infer fields
+      let fields = [];
+      if (model && typeof model.findFirst === 'function') {
+        // Synchronously get fields from a sample record if possible
+        // (This is a hack: in practice, this should be async, but for metadata, one call is fine)
+        // We'll use a cached sample if available
+        if (!this._sampleCache) this._sampleCache = {};
+        if (!this._sampleCache[modelName]) {
+          // This is a sync function, so we can't await. We'll just leave fields empty if not cached.
+        } else {
+          fields = Object.keys(this._sampleCache[modelName]);
+        }
+      }
       return {
         tableName: modelName.toLowerCase(),
-        fields: [],
+        fields,
         relations: [],
         constraints: []
       };
@@ -103,6 +116,21 @@ class DatabaseAnalyzer {
       console.error('Error getting model metadata:', error);
       return null;
     }
+  }
+
+  /**
+   * Dynamically cache a sample record for field introspection
+   * @param {Object} model - Prisma model
+   */
+  async cacheSampleRecord(model) {
+    try {
+      const modelName = this.getModelName(model);
+      if (!this._sampleCache) this._sampleCache = {};
+      if (!this._sampleCache[modelName]) {
+        const sample = await model.findFirst();
+        if (sample) this._sampleCache[modelName] = sample;
+      }
+    } catch (e) {}
   }
 
   /**

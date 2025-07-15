@@ -1,8 +1,8 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const PrismaCrudRouter = require('../index');
-const FileHandler = require('../Curd_op/FileHandler');
-const Api_Response = require('../api_response_folder/Api_Response');
+const {PrismaCrudRouter} = require('../src/index');
+const FileHandler = require('../src/Curd_op/FileHandler');
+const Api_Response = require('../src/api_response_folder/Api_Response');
 
 const app = express();
 const prisma = new PrismaClient();
